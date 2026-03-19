@@ -117,7 +117,7 @@ jobs:
         mkdir obj 2>nul
 
         set CFLAGS=/nologo /c /O2 /W3 /MT /std:c++17 /EHsc ^
-          /DWIN32 /D_WINDOWS /D_USRDLL /DNDEBUG /D_CRT_SECURE_NO_WARNINGS ^
+          /DWIN32 /D_WINDOWS /D_USRDLL /DNDEBUG /D_CRT_SECURE_NO_WARNINGS /DIMGUI_DEFINE_MATH_OPERATORS ^
           /I"src" /I"src/imgui" /I"src/minhook/include"
 
         cl %CFLAGS% src\dllmain.cpp               /Fo"obj\dllmain.obj"
