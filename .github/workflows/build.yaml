@@ -1,0 +1,136 @@
+name: Build KatieCute DLL
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:   # allows manual trigger from GitHub website
+
+jobs:
+  build:
+    runs-on: windows-latest   # real Windows machine in the cloud
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup MSVC
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
+
+    - name: Download ImGui
+      shell: pwsh
+      run: |
+        $base    = "https://raw.githubusercontent.com/ocornut/imgui/master"
+        $backend = "$base/backends"
+        $dir     = "src/imgui"
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+
+        $files = @(
+          "imgui.h","imgui.cpp","imgui_internal.h",
+          "imgui_draw.cpp","imgui_tables.cpp","imgui_widgets.cpp",
+          "imconfig.h","imstb_rectpack.h","imstb_textedit.h","imstb_truetype.h"
+        )
+        $backends = @(
+          "imgui_impl_win32.h","imgui_impl_win32.cpp",
+          "imgui_impl_opengl3.h","imgui_impl_opengl3.cpp",
+          "imgui_impl_opengl3_loader.h"
+        )
+
+        foreach ($f in $files)    { Invoke-WebRequest "$base/$f"    -OutFile "$dir/$f" -UseBasicParsing }
+        foreach ($f in $backends) {
+          try { Invoke-WebRequest "$backend/$f" -OutFile "$dir/$f" -UseBasicParsing } catch {}
+        }
+        Write-Host "ImGui downloaded."
+
+    - name: Download MinHook
+      shell: pwsh
+      run: |
+        $mh  = "https://raw.githubusercontent.com/TsudaKageyu/minhook/master"
+        $inc = "src/minhook/include"
+        $src = "src/minhook/src"
+        $hde = "src/minhook/src/hde"
+        foreach ($d in @($inc,$src,$hde)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
+
+        Invoke-WebRequest "$mh/include/MinHook.h"   -OutFile "$inc/MinHook.h"     -UseBasicParsing
+        Invoke-WebRequest "$mh/src/hook.c"           -OutFile "$src/hook.c"         -UseBasicParsing
+        Invoke-WebRequest "$mh/src/buffer.c"         -OutFile "$src/buffer.c"       -UseBasicParsing
+        Invoke-WebRequest "$mh/src/trampoline.c"     -OutFile "$src/trampoline.c"   -UseBasicParsing
+        Invoke-WebRequest "$mh/src/hde/hde64.c"      -OutFile "$hde/hde64.c"       -UseBasicParsing
+        Invoke-WebRequest "$mh/src/hde/hde64.h"      -OutFile "$hde/hde64.h"       -UseBasicParsing
+        Invoke-WebRequest "$mh/src/hde/hde32.c"      -OutFile "$hde/hde32.c"       -UseBasicParsing
+        Invoke-WebRequest "$mh/src/hde/hde32.h"      -OutFile "$hde/hde32.h"       -UseBasicParsing
+        Invoke-WebRequest "$mh/src/hde/table32.h"    -OutFile "$hde/table32.h"     -UseBasicParsing
+        Invoke-WebRequest "$mh/src/hde/table64.h"    -OutFile "$hde/table64.h"     -UseBasicParsing
+        Invoke-WebRequest "$mh/src/hde/pstdint.h"    -OutFile "$hde/pstdint.h"     -UseBasicParsing
+        Write-Host "MinHook downloaded."
+
+    - name: Compile MinHook lib
+      shell: cmd
+      run: |
+        mkdir src\minhook\lib 2>nul
+        mkdir src\minhook\obj 2>nul
+
+        cl /nologo /c /O2 /W3 /MT /I"src\minhook\src" /I"src\minhook\include" /I"src\minhook\src\hde" ^
+          src\minhook\src\hook.c       /Fo"src\minhook\obj\hook.obj"
+        cl /nologo /c /O2 /W3 /MT /I"src\minhook\src" /I"src\minhook\include" /I"src\minhook\src\hde" ^
+          src\minhook\src\buffer.c     /Fo"src\minhook\obj\buffer.obj"
+        cl /nologo /c /O2 /W3 /MT /I"src\minhook\src" /I"src\minhook\include" /I"src\minhook\src\hde" ^
+          src\minhook\src\trampoline.c /Fo"src\minhook\obj\trampoline.obj"
+        cl /nologo /c /O2 /W3 /MT /I"src\minhook\src" /I"src\minhook\include" /I"src\minhook\src\hde" ^
+          src\minhook\src\hde\hde64.c  /Fo"src\minhook\obj\hde64.obj"
+        cl /nologo /c /O2 /W3 /MT /I"src\minhook\src" /I"src\minhook\include" /I"src\minhook\src\hde" ^
+          src\minhook\src\hde\hde32.c  /Fo"src\minhook\obj\hde32.obj"
+
+        lib /nologo /OUT:src\minhook\lib\MinHook.x64.lib ^
+          src\minhook\obj\hook.obj ^
+          src\minhook\obj\buffer.obj ^
+          src\minhook\obj\trampoline.obj ^
+          src\minhook\obj\hde64.obj ^
+          src\minhook\obj\hde32.obj
+
+        echo MinHook.x64.lib built OK
+
+    - name: Compile KatieCute.dll
+      shell: cmd
+      run: |
+        mkdir bin  2>nul
+        mkdir obj  2>nul
+
+        set CFLAGS=/nologo /c /O2 /W3 /MT /std:c++17 /EHsc ^
+          /DWIN32 /D_WINDOWS /D_USRDLL /DNDEBUG /D_CRT_SECURE_NO_WARNINGS ^
+          /I"src" /I"src/imgui" /I"src/minhook/include"
+
+        cl %CFLAGS% src\dllmain.cpp              /Fo"obj\dllmain.obj"
+        cl %CFLAGS% src\hooks\hook.cpp            /Fo"obj\hook.obj"
+        cl %CFLAGS% src\frontend\menu.cpp         /Fo"obj\menu.obj"
+        cl %CFLAGS% src\imgui\imgui.cpp           /Fo"obj\imgui.obj"
+        cl %CFLAGS% src\imgui\imgui_draw.cpp      /Fo"obj\imgui_draw.obj"
+        cl %CFLAGS% src\imgui\imgui_tables.cpp    /Fo"obj\imgui_tables.obj"
+        cl %CFLAGS% src\imgui\imgui_widgets.cpp   /Fo"obj\imgui_widgets.obj"
+        cl %CFLAGS% src\imgui\imgui_impl_win32.cpp  /Fo"obj\imgui_impl_win32.obj"
+        cl %CFLAGS% src\imgui\imgui_impl_opengl3.cpp /Fo"obj\imgui_impl_opengl3.obj"
+
+        link /nologo /DLL /OUT:bin\KatieCute.dll ^
+          obj\dllmain.obj ^
+          obj\hook.obj ^
+          obj\menu.obj ^
+          obj\imgui.obj ^
+          obj\imgui_draw.obj ^
+          obj\imgui_tables.obj ^
+          obj\imgui_widgets.obj ^
+          obj\imgui_impl_win32.obj ^
+          obj\imgui_impl_opengl3.obj ^
+          src\minhook\lib\MinHook.x64.lib ^
+          opengl32.lib user32.lib gdi32.lib dwmapi.lib kernel32.lib
+
+        echo ============================================
+        echo  BUILD DONE: bin\KatieCute.dll
+        echo ============================================
+
+    - name: Upload DLL artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: KatieCute-DLL
+        path: bin/KatieCute.dll
+        retention-days: 30
