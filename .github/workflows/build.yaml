@@ -19,34 +19,71 @@ jobs:
     - name: Download ImGui
       run: |
         Invoke-WebRequest -Uri "https://github.com/ocornut/imgui/archive/refs/heads/master.zip" -OutFile "imgui.zip"
-        Expand-Archive -Path "imgui.zip" -DestinationPath "."
+        Expand-Archive -Path "imgui.zip" -DestinationPath "." -Force
         New-Item -ItemType Directory -Force -Path "src\imgui"
-        Copy-Item "imgui-master\*.h"   "src\imgui\" -Force
-        Copy-Item "imgui-master\*.cpp" "src\imgui\" -Force
-        Copy-Item "imgui-master\backends\imgui_impl_win32.h"          "src\imgui\" -Force
-        Copy-Item "imgui-master\backends\imgui_impl_win32.cpp"        "src\imgui\" -Force
-        Copy-Item "imgui-master\backends\imgui_impl_opengl3.h"        "src\imgui\" -Force
-        Copy-Item "imgui-master\backends\imgui_impl_opengl3.cpp"      "src\imgui\" -Force
-        Copy-Item "imgui-master\backends\imgui_impl_opengl3_loader.h" "src\imgui\" -Force
+        Copy-Item "imgui-master\*.h"                                      "src\imgui\" -Force
+        Copy-Item "imgui-master\*.cpp"                                    "src\imgui\" -Force
+        Copy-Item "imgui-master\backends\imgui_impl_win32.h"              "src\imgui\" -Force
+        Copy-Item "imgui-master\backends\imgui_impl_win32.cpp"            "src\imgui\" -Force
+        Copy-Item "imgui-master\backends\imgui_impl_opengl3.h"            "src\imgui\" -Force
+        Copy-Item "imgui-master\backends\imgui_impl_opengl3.cpp"          "src\imgui\" -Force
+        Copy-Item "imgui-master\backends\imgui_impl_opengl3_loader.h"     "src\imgui\" -Force
+        Write-Host "ImGui downloaded OK"
       shell: powershell
 
-    - name: Download MinHook
+    - name: Download and Build MinHook from source
       run: |
-        Invoke-WebRequest -Uri "https://github.com/TsudaKageyu/minhook/releases/download/v1.3.3/MinHook_133_lib.zip" -OutFile "minhook.zip"
-        Expand-Archive -Path "minhook.zip" -DestinationPath "minhook_tmp"
+        # Download MinHook source
+        Invoke-WebRequest -Uri "https://github.com/TsudaKageyu/minhook/archive/refs/heads/master.zip" -OutFile "minhook_src.zip"
+        Expand-Archive -Path "minhook_src.zip" -DestinationPath "." -Force
+
+        # Build MinHook static lib
+        msbuild "minhook-master\build\VC17\libMinHook.vcxproj" `
+          /p:Configuration=Release `
+          /p:Platform=x64 `
+          /p:PlatformToolset=v143
+
+        # Setup our expected folder structure
         New-Item -ItemType Directory -Force -Path "src\minhook\include"
         New-Item -ItemType Directory -Force -Path "src\minhook\lib"
-        Copy-Item "minhook_tmp\include\MinHook.h"          "src\minhook\include\" -Force
-        Copy-Item "minhook_tmp\lib\libMinHook.x64.lib"     "src\minhook\lib\MinHook.x64.lib" -Force
+        Copy-Item "minhook-master\include\MinHook.h" "src\minhook\include\" -Force
+
+        # Find the built .lib file wherever it is
+        $libFile = Get-ChildItem -Path "minhook-master" -Recurse -Filter "*.lib" | 
+                   Where-Object { $_.Name -like "*x64*" -or $_.DirectoryName -like "*x64*" } | 
+                   Select-Object -First 1
+        if ($libFile) {
+            Write-Host "Found lib: $($libFile.FullName)"
+            Copy-Item $libFile.FullName "src\minhook\lib\MinHook.x64.lib" -Force
+        } else {
+            # Fallback: grab any .lib file built
+            $libFile = Get-ChildItem -Path "minhook-master" -Recurse -Filter "*.lib" | Select-Object -First 1
+            Write-Host "Fallback lib: $($libFile.FullName)"
+            Copy-Item $libFile.FullName "src\minhook\lib\MinHook.x64.lib" -Force
+        }
+        Write-Host "MinHook built OK"
+        Write-Host "Lib files found:"
+        Get-ChildItem -Path "src\minhook\lib\"
       shell: powershell
 
-    - name: Build DLL
+    - name: Build KatieCute DLL
       run: |
         New-Item -ItemType Directory -Force -Path "bin"
-        msbuild KatieCute.vcxproj /p:Configuration=Release /p:Platform=x64 /p:OutDir="${{ github.workspace }}\bin\" /m
+        msbuild KatieCute.vcxproj `
+          /p:Configuration=Release `
+          /p:Platform=x64 `
+          /p:OutDir="${{ github.workspace }}\bin\" `
+          /m `
+          /v:minimal
       shell: powershell
 
-    - name: Upload artifact
+    - name: Check output
+      run: |
+        Write-Host "=== bin folder ==="
+        Get-ChildItem -Path "bin\" -ErrorAction SilentlyContinue
+      shell: powershell
+
+    - name: Upload DLL artifact
       uses: actions/upload-artifact@v4
       with:
         name: KatieCute-DLL
