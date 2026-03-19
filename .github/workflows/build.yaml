@@ -8,93 +8,409 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v2
+    - uses: actions/checkout@v4
+    - uses: microsoft/setup-msbuild@v2
 
     - name: Download ImGui
-      run: |
-        Invoke-WebRequest -Uri "https://github.com/ocornut/imgui/archive/refs/heads/master.zip" -OutFile "imgui.zip"
-        Expand-Archive -Path "imgui.zip" -DestinationPath "." -Force
-        New-Item -ItemType Directory -Force -Path "src\imgui"
-        Copy-Item "imgui-master\*.h"                                      "src\imgui\" -Force
-        Copy-Item "imgui-master\*.cpp"                                    "src\imgui\" -Force
-        Copy-Item "imgui-master\backends\imgui_impl_win32.h"              "src\imgui\" -Force
-        Copy-Item "imgui-master\backends\imgui_impl_win32.cpp"            "src\imgui\" -Force
-        Copy-Item "imgui-master\backends\imgui_impl_opengl3.h"            "src\imgui\" -Force
-        Copy-Item "imgui-master\backends\imgui_impl_opengl3.cpp"          "src\imgui\" -Force
-        Copy-Item "imgui-master\backends\imgui_impl_opengl3_loader.h"     "src\imgui\" -Force
-        Write-Host "ImGui downloaded OK"
       shell: powershell
-
-    - name: Download and Build MinHook from source
       run: |
-        # Download MinHook source
-        Invoke-WebRequest -Uri "https://github.com/TsudaKageyu/minhook/archive/refs/heads/master.zip" -OutFile "minhook_src.zip"
-        Expand-Archive -Path "minhook_src.zip" -DestinationPath "." -Force
+        Invoke-WebRequest "https://github.com/ocornut/imgui/archive/refs/heads/master.zip" -OutFile imgui.zip
+        Expand-Archive imgui.zip . -Force
+        New-Item -Force -ItemType Directory src\imgui | Out-Null
+        Copy-Item imgui-master\*.h   src\imgui\ -Force
+        Copy-Item imgui-master\*.cpp src\imgui\ -Force
+        Copy-Item imgui-master\backends\imgui_impl_win32.h   src\imgui\ -Force
+        Copy-Item imgui-master\backends\imgui_impl_win32.cpp src\imgui\ -Force
+        Copy-Item imgui-master\backends\imgui_impl_opengl3.h   src\imgui\ -Force
+        Copy-Item imgui-master\backends\imgui_impl_opengl3.cpp src\imgui\ -Force
+        Copy-Item imgui-master\backends\imgui_impl_opengl3_loader.h src\imgui\ -Force
 
-        # Build MinHook static lib
-        msbuild "minhook-master\build\VC17\libMinHook.vcxproj" `
-          /p:Configuration=Release `
-          /p:Platform=x64 `
-          /p:PlatformToolset=v143
-
-        # Setup our expected folder structure
-        New-Item -ItemType Directory -Force -Path "src\minhook\include"
-        New-Item -ItemType Directory -Force -Path "src\minhook\lib"
-        Copy-Item "minhook-master\include\MinHook.h" "src\minhook\include\" -Force
-
-        # Find the built .lib file wherever it is
-        $libFile = Get-ChildItem -Path "minhook-master" -Recurse -Filter "*.lib" | 
-                   Where-Object { $_.Name -like "*x64*" -or $_.DirectoryName -like "*x64*" } | 
-                   Select-Object -First 1
-        if ($libFile) {
-            Write-Host "Found lib: $($libFile.FullName)"
-            Copy-Item $libFile.FullName "src\minhook\lib\MinHook.x64.lib" -Force
-        } else {
-            # Fallback: grab any .lib file built
-            $libFile = Get-ChildItem -Path "minhook-master" -Recurse -Filter "*.lib" | Select-Object -First 1
-            Write-Host "Fallback lib: $($libFile.FullName)"
-            Copy-Item $libFile.FullName "src\minhook\lib\MinHook.x64.lib" -Force
-        }
-        Write-Host "MinHook built OK"
-        Write-Host "Lib files found:"
-        Get-ChildItem -Path "src\minhook\lib\"
+    - name: Build MinHook
       shell: powershell
-
-    - name: Build KatieCute DLL
       run: |
-        New-Item -ItemType Directory -Force -Path "bin"
-        msbuild KatieCute.vcxproj `
-          /p:Configuration=Release `
-          /p:Platform=x64 `
-          /p:OutDir="${{ github.workspace }}\bin\" `
-          /m `
-          /v:minimal
-      shell: powershell
+        Invoke-WebRequest "https://github.com/TsudaKageyu/minhook/archive/refs/heads/master.zip" -OutFile mh.zip
+        Expand-Archive mh.zip . -Force
+        msbuild minhook-master\build\VC17\libMinHook.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /v:m
+        New-Item -Force -ItemType Directory src\minhook\include | Out-Null
+        New-Item -Force -ItemType Directory src\minhook\lib     | Out-Null
+        Copy-Item minhook-master\include\MinHook.h src\minhook\include\ -Force
+        $lib = Get-ChildItem minhook-master -Recurse -Filter "*.lib" | Select -First 1
+        Copy-Item $lib.FullName src\minhook\lib\MinHook.x64.lib -Force
+        Write-Host "MinHook lib: $($lib.FullName)"
 
-    - name: Check output
+    - name: Write source files
+      shell: powershell
       run: |
-        Write-Host "=== bin folder ==="
-        Get-ChildItem -Path "bin\" -ErrorAction SilentlyContinue
-      shell: powershell
+        New-Item -Force -ItemType Directory src\hooks    | Out-Null
+        New-Item -Force -ItemType Directory src\frontend | Out-Null
 
-    - name: Upload DLL artifact
+        # ── colors.h ──────────────────────────────────────────────
+        @'
+#pragma once
+#include "imgui/imgui.h"
+namespace Colors {
+  inline ImVec4 accent        =ImColor(255,105,180,255);
+  inline ImVec4 accent_dim    =ImColor(255,105,180,160);
+  inline ImVec4 accent_glow   =ImColor(255, 20,147,255);
+  inline ImVec4 accent_dark   =ImColor(180, 50,120,255);
+  inline ImVec4 window_bg     =ImColor( 10,  3, 15,240);
+  inline ImVec4 sidebar_bg    =ImColor( 15,  5, 22,245);
+  inline ImVec4 header_bg     =ImColor( 15,  5, 22,245);
+  inline ImVec4 stroke        =ImColor( 50, 20, 60,255);
+  inline ImVec4 child_bg      =ImColor( 18,  6, 26,200);
+  inline ImVec4 child_title   =ImColor(255,105,180,255);
+  inline ImVec4 text_active   =ImColor(255,255,255,255);
+  inline ImVec4 text_inactive =ImColor(160,120,160,255);
+  inline ImVec4 sel_active_bg =ImColor( 40, 15, 55,255);
+  inline ImVec4 sel_text_off  =ImColor(140,100,150,255);
+  inline ImVec4 chk_bg        =ImColor( 30, 10, 40,255);
+  inline ImVec4 chk_stroke    =ImColor( 60, 25, 70,255);
+  inline ImVec4 chk_mark      =ImColor(255,255,255,255);
+  inline ImVec4 slider_bg     =ImColor( 25,  8, 35,255);
+  inline ImVec4 slider_grab   =ImColor(255,255,255,255);
+  inline ImVec4 btn_bg        =ImColor( 30, 10, 42,255);
+  inline ImVec4 btn_hov       =ImColor( 50, 20, 65,255);
+  inline ImVec4 btn_stroke    =ImColor( 60, 25, 75,255);
+  inline ImVec4 scroll_bg     =ImColor( 15,  5, 20,255);
+  inline ImVec4 scroll_grab   =ImColor( 80, 30, 90,255);
+  inline ImVec4 scroll_hov    =ImColor(120, 50,130,255);
+  inline ImVec4 subtab_active =ImColor(255,105,180,255);
+  inline ImVec4 subtab_inactive=ImColor(140,100,150,255);
+  inline ImVec4 subtab_line   =ImColor(255,105,180,200);
+}
+'@ | Set-Content src\frontend\colors.h -Encoding UTF8
+
+        # ── menu.h ────────────────────────────────────────────────
+        @'
+#pragma once
+#include <Windows.h>
+#include <functional>
+#include "imgui/imgui.h"
+namespace Menu {
+  extern bool g_ShowMenu;
+  extern int  g_Page, g_SubPage;
+  void ApplyStyle();
+  void Render();
+  bool KcCheckbox(const char* l, bool* v);
+  bool KcButton(const char* l, ImVec2 s={0,0});
+  bool KcSliderFloat(const char* l, float* v, float mn, float mx);
+  void KcGroupBox(const char* l, ImVec2 s, std::function<void()> fn);
+  bool KcSubtab(const char* l, int idx, int& cur);
+}
+'@ | Set-Content src\frontend\menu.h -Encoding UTF8
+
+        # ── hook.h ────────────────────────────────────────────────
+        @'
+#pragma once
+#include <Windows.h>
+#include "imgui/imgui.h"
+#include "imgui/imgui_impl_win32.h"
+#include "imgui/imgui_impl_opengl3.h"
+#include "minhook/include/MinHook.h"
+namespace Hook {
+  using wglSwapBuffers_t = BOOL(WINAPI*)(HDC);
+  using WndProc_t = LRESULT(CALLBACK*)(HWND,UINT,WPARAM,LPARAM);
+  extern wglSwapBuffers_t o_wglSwapBuffers;
+  extern WndProc_t o_WndProc;
+  extern HWND g_hWnd;
+  extern bool g_Initialized;
+  void Init(); void Shutdown();
+  BOOL WINAPI hk_wglSwapBuffers(HDC);
+  LRESULT CALLBACK hk_WndProc(HWND,UINT,WPARAM,LPARAM);
+}
+'@ | Set-Content src\hooks\hook.h -Encoding UTF8
+
+        Write-Host "Header files written OK"
+
+    - name: Write cpp files
+      shell: powershell
+      run: |
+        # ── dllmain.cpp ───────────────────────────────────────────
+        @'
+#include <Windows.h>
+#include "hooks/hook.h"
+DWORD WINAPI MainThread(LPVOID lp){
+  while(!FindWindowA(nullptr,"Growtopia"))Sleep(500);
+  Sleep(1000); Hook::Init();
+  while(!GetAsyncKeyState(VK_END))Sleep(100);
+  Hook::Shutdown(); FreeLibraryAndExitThread((HMODULE)lp,0); return 0;
+}
+BOOL APIENTRY DllMain(HMODULE hMod,DWORD r,LPVOID){
+  if(r==DLL_PROCESS_ATTACH){DisableThreadLibraryCalls(hMod);CreateThread(nullptr,0,MainThread,hMod,0,nullptr);}
+  return TRUE;
+}
+'@ | Set-Content src\dllmain.cpp -Encoding UTF8
+
+        # ── hook.cpp ──────────────────────────────────────────────
+        @'
+#include <Windows.h>
+#include <gl/GL.h>
+#pragma comment(lib,"opengl32.lib")
+#include "imgui/imgui.h"
+#include "imgui/imgui_impl_win32.h"
+#include "imgui/imgui_impl_opengl3.h"
+#include "minhook/include/MinHook.h"
+#pragma comment(lib,"minhook/lib/MinHook.x64.lib")
+#include "hooks/hook.h"
+#include "frontend/menu.h"
+#include "frontend/colors.h"
+namespace Hook{
+  wglSwapBuffers_t o_wglSwapBuffers=nullptr;
+  WndProc_t o_WndProc=nullptr;
+  HWND g_hWnd=nullptr; bool g_Initialized=false;
+  static void InitImGui(HDC hDc){
+    g_hWnd=WindowFromDC(hDc); IMGUI_CHECKVERSION(); ImGui::CreateContext();
+    ImGuiIO&io=ImGui::GetIO(); io.ConfigFlags|=ImGuiConfigFlags_NoMouseCursorChange; io.IniFilename=nullptr;
+    ImGui_ImplWin32_Init(g_hWnd); ImGui_ImplOpenGL3_Init("#version 130");
+    Menu::ApplyStyle();
+    o_WndProc=(WndProc_t)SetWindowLongPtrW(g_hWnd,GWLP_WNDPROC,(LONG_PTR)hk_WndProc);
+    g_Initialized=true;
+  }
+  BOOL WINAPI hk_wglSwapBuffers(HDC hDc){
+    if(!g_Initialized)InitImGui(hDc);
+    GLint lp,lt,la;
+    glGetIntegerv(GL_CURRENT_PROGRAM,&lp); glGetIntegerv(GL_TEXTURE_BINDING_2D,&lt); glGetIntegerv(GL_ARRAY_BUFFER_BINDING,&la);
+    ImGui_ImplOpenGL3_NewFrame(); ImGui_ImplWin32_NewFrame(); ImGui::NewFrame();
+    Menu::Render(); ImGui::Render(); ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    glUseProgram(lp); glBindTexture(GL_TEXTURE_2D,lt); glBindBuffer(GL_ARRAY_BUFFER,la);
+    return o_wglSwapBuffers(hDc);
+  }
+  extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND,UINT,WPARAM,LPARAM);
+  LRESULT CALLBACK hk_WndProc(HWND hWnd,UINT uMsg,WPARAM wParam,LPARAM lParam){
+    if(uMsg==WM_KEYDOWN&&wParam==VK_INSERT)Menu::g_ShowMenu=!Menu::g_ShowMenu;
+    if(Menu::g_ShowMenu){ImGui_ImplWin32_WndProcHandler(hWnd,uMsg,wParam,lParam);
+      if(ImGui::GetIO().WantCaptureMouse||ImGui::GetIO().WantCaptureKeyboard)return TRUE;}
+    return CallWindowProcW(o_WndProc,hWnd,uMsg,wParam,lParam);
+  }
+  void Init(){MH_Initialize();HMODULE h=GetModuleHandleA("opengl32.dll");if(!h)h=LoadLibraryA("opengl32.dll");
+    void*p=(void*)GetProcAddress(h,"wglSwapBuffers");MH_CreateHook(p,(void*)hk_wglSwapBuffers,(void**)&o_wglSwapBuffers);MH_EnableHook(p);}
+  void Shutdown(){MH_DisableHook(MH_ALL_HOOKS);MH_Uninitialize();
+    if(g_hWnd&&o_WndProc)SetWindowLongPtrW(g_hWnd,GWLP_WNDPROC,(LONG_PTR)o_WndProc);
+    ImGui_ImplOpenGL3_Shutdown();ImGui_ImplWin32_Shutdown();ImGui::DestroyContext();}
+}
+'@ | Set-Content src\hooks\hook.cpp -Encoding UTF8
+
+        Write-Host "CPP files written OK"
+
+    - name: Write menu.cpp
+      shell: powershell
+      run: |
+        $menu = @'
+#include <Windows.h>
+#include <string>
+#include <functional>
+#include "imgui/imgui.h"
+#include "imgui/imgui_internal.h"
+#include "frontend/menu.h"
+#include "frontend/colors.h"
+namespace Menu{
+bool g_ShowMenu=false; int g_Page=0,g_SubPage=0;
+struct F{bool mf=0,ff=0,cg=0,nn=0,nc=0,ap=0,nv=0,nb=0,ds=0,dd=0,ec=0,pf=0,dm=0,mm=0,esp=0,fps=1,su=0;float rng=20;}f;
+static const float W=680,H=470,SW=70,HH=55;
+static ImU32 C(ImVec4 v){return ImGui::ColorConvertFloat4ToU32(v);}
+static void T(ImDrawList*d,ImVec2 p,ImU32 c,const char*s){d->AddText(ImGui::GetFont(),ImGui::GetFontSize(),p,c,s);}
+void ApplyStyle(){ImGuiStyle&s=ImGui::GetStyle();
+  s.WindowPadding={0,0};s.WindowRounding=8;s.WindowBorderSize=0;
+  s.ChildRounding=4;s.ChildBorderSize=0;s.FramePadding={8,4};s.FrameRounding=4;
+  s.ItemSpacing={8,6};s.ScrollbarSize=4;s.GrabMinSize=8;s.GrabRounding=4;
+  ImVec4*c=s.Colors;
+  c[ImGuiCol_WindowBg]=Colors::window_bg;c[ImGuiCol_ChildBg]=Colors::child_bg;
+  c[ImGuiCol_PopupBg]=ImColor(12,4,18,240);c[ImGuiCol_Border]=Colors::stroke;
+  c[ImGuiCol_FrameBg]=Colors::chk_bg;c[ImGuiCol_FrameBgHovered]=Colors::btn_hov;
+  c[ImGuiCol_FrameBgActive]=Colors::accent_dark;
+  c[ImGuiCol_ScrollbarBg]=Colors::scroll_bg;c[ImGuiCol_ScrollbarGrab]=Colors::scroll_grab;
+  c[ImGuiCol_ScrollbarGrabHovered]=Colors::scroll_hov;c[ImGuiCol_ScrollbarGrabActive]=Colors::accent;
+  c[ImGuiCol_CheckMark]=Colors::chk_mark;c[ImGuiCol_SliderGrab]=Colors::slider_grab;
+  c[ImGuiCol_SliderGrabActive]=Colors::accent;c[ImGuiCol_Button]=Colors::btn_bg;
+  c[ImGuiCol_ButtonHovered]=Colors::btn_hov;c[ImGuiCol_ButtonActive]=Colors::accent;
+  c[ImGuiCol_Text]=Colors::text_active;c[ImGuiCol_TextDisabled]=Colors::text_inactive;}
+bool KcCheckbox(const char*label,bool*v){
+  ImDrawList*d=ImGui::GetWindowDrawList();ImVec2 p=ImGui::GetCursorScreenPos();float sz=16;
+  ImGui::InvisibleButton(label,{ImGui::GetContentRegionAvail().x,sz+4});
+  bool hov=ImGui::IsItemHovered(),clk=ImGui::IsItemClicked();if(clk)*v=!*v;
+  d->AddRectFilled(p+ImVec2(0,2),p+ImVec2(sz,sz+2),*v?C(Colors::accent):C(Colors::chk_bg),3);
+  d->AddRect(p+ImVec2(0,2),p+ImVec2(sz,sz+2),hov?C(Colors::accent_dim):C(Colors::chk_stroke),3);
+  if(*v){d->AddLine(p+ImVec2(3,9),p+ImVec2(6,12),IM_COL32(255,255,255,255),2);d->AddLine(p+ImVec2(6,12),p+ImVec2(13,5),IM_COL32(255,255,255,255),2);}
+  T(d,p+ImVec2(sz+8,2),hov?C(Colors::text_active):C(Colors::text_inactive),label);return clk;}
+bool KcButton(const char*label,ImVec2 size){
+  if(!size.x)size.x=ImGui::GetContentRegionAvail().x;if(!size.y)size.y=24;
+  ImDrawList*d=ImGui::GetWindowDrawList();ImVec2 p=ImGui::GetCursorScreenPos();
+  ImGui::InvisibleButton(label,size);bool hov=ImGui::IsItemHovered(),clk=ImGui::IsItemClicked();
+  d->AddRectFilled(p,p+size,hov?C(Colors::btn_hov):C(Colors::btn_bg),4);
+  d->AddRect(p,p+size,hov?C(Colors::accent_dim):C(Colors::btn_stroke),4);
+  ImVec2 ts=ImGui::CalcTextSize(label);T(d,p+(size-ts)*.5f,C(Colors::text_active),label);return clk;}
+bool KcSliderFloat(const char*label,float*v,float mn,float mx){
+  ImGui::PushStyleColor(ImGuiCol_FrameBg,Colors::slider_bg);
+  ImGui::PushStyleColor(ImGuiCol_SliderGrab,Colors::accent);
+  ImGui::PushStyleColor(ImGuiCol_Text,Colors::text_inactive);
+  bool r=ImGui::SliderFloat(label,v,mn,mx,"%.1f");ImGui::PopStyleColor(3);return r;}
+void KcGroupBox(const char*label,ImVec2 sz,std::function<void()>fn){
+  ImDrawList*d=ImGui::GetWindowDrawList();ImVec2 p=ImGui::GetCursorScreenPos();
+  d->AddRect(p,p+sz,C(Colors::stroke),4);
+  ImVec2 ts=ImGui::CalcTextSize(label);
+  d->AddRectFilled(p+ImVec2(8,-1),p+ImVec2(10+ts.x,1),C(Colors::child_bg));
+  T(d,p+ImVec2(10,-7),C(Colors::child_title),label);
+  ImGui::SetCursorScreenPos(p+ImVec2(0,12));
+  ImGui::BeginChild(label,sz-ImVec2(0,12),false,ImGuiWindowFlags_NoScrollbar);
+  ImGui::SetCursorPos({10,8});fn();ImGui::EndChild();}
+bool KcSubtab(const char*label,int idx,int&cur){
+  ImDrawList*d=ImGui::GetWindowDrawList();ImVec2 p=ImGui::GetCursorScreenPos();
+  float w=ImGui::CalcTextSize(label).x+20,h=22;
+  ImGui::InvisibleButton(label,{w,h});bool hov=ImGui::IsItemHovered(),clk=ImGui::IsItemClicked();
+  if(clk)cur=idx;bool act=(cur==idx);
+  T(d,p+ImVec2(10,3),act?C(Colors::subtab_active):hov?C(Colors::text_active):C(Colors::subtab_inactive),label);
+  if(act)d->AddLine(p+ImVec2(10,h-1),p+ImVec2(w-10,h-1),C(Colors::subtab_line),2);
+  ImGui::SameLine();return clk;}
+void Sidebar(ImDrawList*d,ImVec2 p){
+  d->AddRectFilled(p,p+ImVec2(SW,H),C(Colors::sidebar_bg),8,ImDrawFlags_RoundCornersLeft);
+  d->AddLine(p+ImVec2(SW,0),p+ImVec2(SW,H),C(Colors::stroke));
+  d->AddCircleFilled(p+ImVec2(35,30),18,C(Colors::accent_dark),60);
+  d->AddCircle(p+ImVec2(35,30),19,C(Colors::accent),60,1.5f);
+  T(d,p+ImVec2(24,23),C(Colors::text_active),"KC");
+  d->AddLine(p+ImVec2(15,176),p+ImVec2(55,176),IM_COL32(255,255,255,15));
+  d->AddLine(p+ImVec2(15,294),p+ImVec2(55,294),IM_COL32(255,255,255,15));
+  const char*icons[]={"Main","Map","</>","Hook","Set"};
+  for(int i=0;i<5;i++){float y=58.f+i*72;bool act=(g_Page==i);
+    ImVec2 tp=p+ImVec2(0,y),ts={SW,60};
+    if(act){d->AddRectFilled(tp,tp+ts,C(Colors::sel_active_bg));d->AddRectFilled(tp,tp+ImVec2(3,60),C(Colors::accent));}
+    ImVec2 is=ImGui::CalcTextSize(icons[i]);T(d,tp+(ts-is)*.5f,act?C(Colors::accent):C(Colors::sel_text_off),icons[i]);
+    ImGui::SetCursorScreenPos(tp);std::string id="##t"+std::to_string(i);
+    ImGui::InvisibleButton(id.c_str(),ts);if(ImGui::IsItemClicked()){g_Page=i;g_SubPage=0;}}}
+void Header(ImDrawList*d,ImVec2 p){
+  d->AddRectFilled(p+ImVec2(SW,0),p+ImVec2(W,HH),C(Colors::header_bg),8,ImDrawFlags_RoundCornersTopRight);
+  d->AddLine(p+ImVec2(SW,HH),p+ImVec2(W,HH),C(Colors::stroke));
+  ImGui::SetCursorScreenPos(p+ImVec2(SW+12,16));
+  if(g_Page==0){KcSubtab("Patches",0,g_SubPage);KcSubtab("Cheats",1,g_SubPage);}
+  else if(g_Page==1)KcSubtab("Minimap",0,g_SubPage);
+  else if(g_Page==2){KcSubtab("Scripts",0,g_SubPage);KcSubtab("Logs",1,g_SubPage);}
+  else if(g_Page==4){KcSubtab("General",0,g_SubPage);}
+  char tb[16];SYSTEMTIME st;GetLocalTime(&st);sprintf_s(tb,"%02d:%02d",st.wHour,st.wMinute);
+  ImVec2 ts=ImGui::CalcTextSize(tb);T(d,p+ImVec2(W-ts.x-12,18),C(Colors::accent),tb);}
+void Page0(ImVec2 o){
+  ImGui::SetCursorScreenPos(o);
+  ImGui::BeginChild("##p0",{W-SW-20,H-HH-10},false,ImGuiWindowFlags_NoScrollbar);
+  float cw=(ImGui::GetContentRegionAvail().x-20)*.5f;
+  ImGui::BeginChild("##l0",{cw,0});
+  KcGroupBox("Patches",{cw-10,210},[&]{KcCheckbox("Mod Fly",&f.mf);ImGui::Spacing();KcCheckbox("Fast Fruits",&f.ff);ImGui::Spacing();KcCheckbox("Can See Ghost",&f.cg);ImGui::Spacing();KcCheckbox("No Name",&f.nn);});
+  ImGui::EndChild();ImGui::SameLine(0,20);
+  ImGui::BeginChild("##r0",{cw,0});
+  KcGroupBox("More",{cw-10,210},[&]{KcCheckbox("No Clip",&f.nc);ImGui::Spacing();KcCheckbox("Anti Portal",&f.ap);ImGui::Spacing();KcCheckbox("Night Vision",&f.nv);ImGui::Spacing();KcCheckbox("No Block",&f.nb);});
+  ImGui::EndChild();ImGui::EndChild();}
+void Page1(ImVec2 o){
+  ImGui::SetCursorScreenPos(o);
+  ImGui::BeginChild("##p1",{W-SW-20,H-HH-10},false,ImGuiWindowFlags_NoScrollbar);
+  float cw=(ImGui::GetContentRegionAvail().x-20)*.5f;
+  ImGui::BeginChild("##l1",{cw,0});
+  KcGroupBox("Cheats",{cw-10,200},[&]{KcCheckbox("Draw Sign",&f.ds);ImGui::Spacing();KcCheckbox("Draw Door",&f.dd);ImGui::Spacing();KcCheckbox("Entrance",&f.ec);ImGui::Spacing();KcCheckbox("Path Finder",&f.pf);ImGui::Spacing();KcCheckbox("Dev Mode",&f.dm);});
+  ImGui::EndChild();ImGui::EndChild();}
+void Page2(ImVec2 o){ImGui::SetCursorScreenPos(o);ImGui::BeginChild("##p2",{W-SW-20,H-HH-10});ImGui::TextColored(Colors::text_inactive,"Use in-game Minimap tab");ImGui::EndChild();}
+void Page4(ImVec2 o){
+  ImGui::SetCursorScreenPos(o);
+  ImGui::BeginChild("##p4",{W-SW-20,H-HH-10});
+  float cw=(ImGui::GetContentRegionAvail().x-20)*.5f;
+  ImGui::BeginChild("##l4",{cw,0});
+  KcGroupBox("General",{cw-10,160},[&]{KcCheckbox("Show FPS",&f.fps);ImGui::Spacing();KcCheckbox("Skip Update",&f.su);});
+  ImGui::EndChild();ImGui::EndChild();}
+void Render(){
+  if(!g_ShowMenu)return;
+  ImGui::SetNextWindowSize({W,H},ImGuiCond_Always);ImGui::SetNextWindowBgAlpha(0);
+  ImGui::Begin("##kc",nullptr,ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse|ImGuiWindowFlags_NoBringToDisplayOnFocus);
+  ImDrawList*d=ImGui::GetWindowDrawList();ImVec2 p=ImGui::GetWindowPos();
+  d->AddRectFilled(p+ImVec2(SW,HH),p+ImVec2(W,H),C(Colors::window_bg),8,ImDrawFlags_RoundCornersBottomRight);
+  for(int i=4;i>=1;i--){float o=(float)(i*3);d->AddRect(p-ImVec2(o,o),p+ImVec2(W+o,H+o),IM_COL32(0,0,0,30*i),10);}
+  Sidebar(d,p);Header(d,p);
+  ImVec2 co=p+ImVec2(SW+10,HH+8);
+  if(g_Page==0)g_SubPage==0?Page0(co):Page1(co);
+  else if(g_Page==1)Page2(co);
+  else if(g_Page==4)Page4(co);
+  else{ImGui::SetCursorScreenPos(co);ImGui::TextColored(Colors::text_inactive,"Coming soon...");}
+  ImGui::End();}
+}
+'@
+        $menu | Set-Content src\frontend\menu.cpp -Encoding UTF8
+        Write-Host "menu.cpp written"
+        Write-Host "Verifying no pch references..."
+        Select-String -Path src\*.cpp,src\hooks\*.cpp,src\frontend\*.cpp,src\hooks\*.h,src\frontend\*.h -Pattern "pch" -ErrorAction SilentlyContinue
+        Write-Host "All files ready!"
+
+    - name: Write vcxproj
+      shell: powershell
+      run: |
+        @'
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
+    <RootNamespace>KatieCute</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props"/>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props"/>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutDir>$(ProjectDir)bin\</OutDir>
+    <IntDir>$(ProjectDir)obj\</IntDir>
+    <TargetName>KatieCute</TargetName>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <PreprocessorDefinitions>NDEBUG;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <AdditionalIncludeDirectories>$(ProjectDir)src;$(ProjectDir)src\imgui;$(ProjectDir)src\minhook\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <AdditionalDependencies>opengl32.lib;$(ProjectDir)src\minhook\lib\MinHook.x64.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="src\dllmain.cpp"/>
+    <ClCompile Include="src\hooks\hook.cpp"/>
+    <ClCompile Include="src\frontend\menu.cpp"/>
+    <ClCompile Include="src\imgui\imgui.cpp"/>
+    <ClCompile Include="src\imgui\imgui_draw.cpp"/>
+    <ClCompile Include="src\imgui\imgui_tables.cpp"/>
+    <ClCompile Include="src\imgui\imgui_widgets.cpp"/>
+    <ClCompile Include="src\imgui\imgui_impl_win32.cpp"/>
+    <ClCompile Include="src\imgui\imgui_impl_opengl3.cpp"/>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets"/>
+</Project>
+'@ | Set-Content KatieCute.vcxproj -Encoding UTF8
+        Write-Host "vcxproj written"
+
+    - name: Build DLL
+      shell: powershell
+      run: |
+        New-Item -Force -ItemType Directory bin | Out-Null
+        msbuild KatieCute.vcxproj /p:Configuration=Release /p:Platform=x64 /p:OutDir="$((Get-Location).Path)\bin\" /m /v:minimal
+
+    - name: Upload
       uses: actions/upload-artifact@v4
       with:
         name: KatieCute-DLL
         path: bin\KatieCute.dll
         if-no-files-found: error
 
-    - name: Create Release
+    - name: Release
       uses: softprops/action-gh-release@v1
       with:
         tag_name: build-${{ github.run_number }}
-        name: "KatieCute Build #${{ github.run_number }}"
+        name: "KatieCute #${{ github.run_number }}"
         files: bin\KatieCute.dll
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
